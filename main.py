@@ -127,7 +127,7 @@ def minio_upload(local_path: str, object_name: str, content_type: str = "applica
     return f"http://{MINIO_ENDPOINT}/{MINIO_BUCKET}/{object_name}"
 
 
-from pars1 import process_invoice_and_replace
+from pars import process_invoice_and_replace
 
 
 def build_font_map(user_dir: str) -> Dict[str, str]:
