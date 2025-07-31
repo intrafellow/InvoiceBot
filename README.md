@@ -20,8 +20,12 @@ AI-инструмент для обработки счетов в формате
 
 ##  Быстрый старт
 ```bash
-uvicorn main:app --reload  # Backend
-python bot.py              # Telegram Bot
+# Запуск через Docker Compose (backend + MinIO)
+docker-compose up --build
+
+# Локально:
+uvicorn main:app --reload        # Backend API
+python bot.py                    # Telegram Bot
 ```
 
 ### Переменные окружения (.env):
@@ -37,10 +41,17 @@ GEMINI_API_KEY=...
 
 ## Структура
 ```
-main.py        # FastAPI backend
-bot.py         # Telegram-бот
-pars.py        # Парсинг и обработка PDF
-uploads/       # Локальные файлы
+main.py                 # Точка входа FastAPI
+bot.py                  # Telegram-бот (Aiogram)
+routers/                # Фичевые роутеры FastAPI (user, template, file, health)
+schemas/                # Pydantic-схемы (строгая валидация)
+services/               # Бизнес-логика (MinIO, Gemini, парсинг)
+utils/                  # Утилиты (pdf, fonts, etc)
+uploads/                # Локальные файлы пользователей
+logging_conf.py         # Конфиг централизованного логгера
+tests/                  # Pytest-юнит-тесты (автоматизация)
+Dockerfile              # Сборка образа backend
+docker-compose.yaml     # Композиция сервисов (MinIO, backend, bot)
 ```
 
 ## Пример использования
