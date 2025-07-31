@@ -5,7 +5,7 @@ import shutil
 import zipfile
 import xml.etree.ElementTree as ET
 from typing import Dict, Union, Optional, List
-import logging_conf  # импорт твоего конфига (достаточно 1 раз где угодно)
+import logging_conf
 
 logger = logging_conf.logger.getChild("pdf_util")
 
@@ -164,7 +164,7 @@ def process_invoice_and_replace(
     output_pdf: str,
     changes: Dict[str, str],
     font_map: Optional[Dict[str, str]] = None,
-    extract_fields_with_bbox_gemini=None  # <- функция-инъекция!
+    extract_fields_with_bbox_gemini=None
 ) -> Dict[str, Union[int, str, dict]]:
     blocks = extract_blocks_from_pdf(pdf_path)
     if extract_fields_with_bbox_gemini is None:
