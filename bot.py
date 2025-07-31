@@ -16,7 +16,7 @@ from aiogram.filters import CommandStart
 from aiohttp import FormData, ClientSession
 from aiogram.client.default import DefaultBotProperties
 
-API_TOKEN = os.getenv("BOT_TOKEN", "your_bot_token")
+API_TOKEN = os.getenv("BOT_TOKEN", "7687107590:AAEaIJq9MgELGgYcISF0ht6fPNiTEv4JV7k")
 API_BASE = os.getenv("API_BASE", "http://localhost:8000")
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -33,6 +33,41 @@ main_menu = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True
 )
+
+
+def pretty_scenario_status(scenario: dict) -> str:
+    if not scenario:
+        return ""
+    steps = [
+        "upload", "extract_fonts", "process_pdf", "parse_fields", "replace_fonts", "save_files", "upload_minio"
+    ]
+    step_emojis = {
+        "upload": "⬆️", "extract_fonts": "🔤", "process_pdf": "📄", "parse_fields": "🧩",
+        "replace_fonts": "🖋️", "save_files": "💾", "upload_minio": "☁️"
+    }
+    current = scenario.get("step", "")
+    status = scenario.get("status", "")
+    lines = []
+    found_current = False
+    for step in steps:
+        emoji = step_emojis.get(step, "•")
+        if status == "error" and step == current:
+            lines.append(f"{emoji} <b>{step}</b> — ❌ <b>Ошибка</b>")
+            found_current = True
+            break
+        elif step == current:
+            lines.append(f"{emoji} <b>{step}</b> — <b>В процессе...</b>")
+            found_current = True
+        elif not found_current:
+            lines.append(f"{emoji} {step} — ✅")
+        else:
+            lines.append(f"{emoji} {step} — ⏳")
+    if scenario.get("log"):
+        lines.append("\n<b>Лог:</b>")
+        for entry in scenario["log"]:
+            msg = entry.get("error") or entry.get("message") or ""
+            lines.append(f"{entry.get('time', '')} [{entry.get('step', '')}]: {msg}")
+    return "\n".join(lines)
 
 
 def make_user_edit_json(parsed_data: dict) -> dict:
@@ -63,7 +98,8 @@ def make_user_edit_json(parsed_data: dict) -> dict:
 
 
 def pretty_print_editable_fields(user_json: dict) -> str:
-    return "\n".join([f"{i}. {k}: {v}" for i, (k, v) in enumerate(user_json.items(), 1)]) or "Нет полей для редактирования."
+    return "\n".join(
+        [f"{i}. {k}: {v}" for i, (k, v) in enumerate(user_json.items(), 1)]) or "Нет полей для редактирования."
 
 
 def get_user_dir(tg_id: str) -> str:
@@ -77,7 +113,7 @@ async def start(msg: Message):
     user_id = f"tg_{msg.from_user.id}"
     full_name = msg.from_user.full_name
     async with ClientSession() as session:
-        await session.post(f"{API_BASE}/register", params={"tg_id": user_id, "full_name": full_name})
+        await session.post(f"{API_BASE}/api/v1/user/register", params={"tg_id": user_id, "full_name": full_name})
     await msg.answer(
         f"👋 Привет, <b>{full_name}</b>!\n"
         "Добро пожаловать в <b>InvoiceBot</b>.\n"
@@ -98,7 +134,7 @@ async def handle_ttf_or_template(msg: Message):
         form.add_field("ttf_file", file, filename=msg.document.file_name, content_type="font/ttf")
         async with ClientSession() as session:
             await session.post(
-                f"{API_BASE}/upload-font",
+                f"{API_BASE}/api/v1/template/upload-font",
                 data=form,
                 params={"tg_id": user_id}
             )
@@ -117,13 +153,20 @@ async def handle_ttf_or_template(msg: Message):
     form.add_field("file", open(path, "rb"), filename=msg.document.file_name, content_type=msg.document.mime_type)
     for fname in os.listdir(user_dir):
         if fname.lower().endswith(".ttf"):
-            form.add_field("ttf_files", open(os.path.join(user_dir, fname), "rb"), filename=fname, content_type="font/ttf")
+            form.add_field("ttf_files", open(os.path.join(user_dir, fname), "rb"), filename=fname,
+                           content_type="font/ttf")
     await msg.answer("⏳ Обработка шаблона...", reply_markup=main_menu)
     async with ClientSession() as session:
         async with session.post(f"{API_BASE}/upload-template", data=form, params={"tg_id": user_id}) as resp:
             data = await resp.json()
     if resp.status != 200:
         return await msg.answer(f"❌ {data.get('detail')}", reply_markup=main_menu)
+
+    scenario = data.get('scenario')
+    if scenario:
+        text = pretty_scenario_status(scenario)
+        await msg.answer(f"📈 Прогресс:\n{text}", reply_markup=main_menu)
+
     fonts = data.get("fonts", [])
     parsed = data.get("parsed_data", {})
     user_friendly = make_user_edit_json(parsed)
@@ -133,10 +176,10 @@ async def handle_ttf_or_template(msg: Message):
         [InlineKeyboardButton(text="✏️ Изменить поля", callback_data="edit_parsed")]
     ])
     text = (
-        f"✅ Шаблон загружен!\n"
-        + (f"🧩 Шрифты: {', '.join(fonts)}\n" if fonts else "")
-        + f"<pre>{parsed_str}</pre>\n"
-        "Отправьте JSON вида: {\"Service 1\": \"Новое описание\", \"Total\": \"1000\"}"
+            f"✅ Шаблон загружен!\n"
+            + (f"🧩 Шрифты: {', '.join(fonts)}\n" if fonts else "")
+            + f"<pre>{parsed_str}</pre>\n"
+              "Отправьте JSON вида: {\"Service 1\": \"Новое описание\", \"Total\": \"1000\"}"
     )
     await msg.answer(text, reply_markup=kb)
 
@@ -145,10 +188,10 @@ async def handle_ttf_or_template(msg: Message):
 async def confirm_cb(cb: types.CallbackQuery):
     user_id = f"tg_{cb.from_user.id}"
     async with ClientSession() as session:
-        async with session.post(f"{API_BASE}/confirm-latest-template", params={"tg_id": user_id}) as resp:
+        async with session.post(f"{API_BASE}/api/v1/template/confirm-latest-template", params={"tg_id": user_id}) as resp:
             res = await resp.json()
         updated_pdf_name = res.get("updated_pdf_name") or "invoice_updated.pdf"
-        async with session.get(f"{API_BASE}/get-presigned-url", params={
+        async with session.get(f"{API_BASE}/api/v1/file/get-presigned-url", params={
             "tg_id": user_id,
             "filename": updated_pdf_name
         }) as presigned_resp:
@@ -169,12 +212,14 @@ async def confirm_cb(cb: types.CallbackQuery):
         links = []
         if res.get("extracted_fonts_url"):
             fname = res["extracted_fonts_url"].split("/")[-1]
-            async with session.get(f"{API_BASE}/get-presigned-url", params={"tg_id": user_id, "filename": fname}) as font_url_resp:
+            async with session.get(f"{API_BASE}/api/v1/file/get-presigned-url",
+                                   params={"tg_id": user_id, "filename": fname}) as font_url_resp:
                 font_presigned = await font_url_resp.json()
             links.append(f'🧩 <a href="{font_presigned["presigned_url"]}">Шрифты</a>')
         if res.get("parsed_json_url"):
             fname = res["parsed_json_url"].split("/")[-1]
-            async with session.get(f"{API_BASE}/get-presigned-url", params={"tg_id": user_id, "filename": fname}) as json_url_resp:
+            async with session.get(f"{API_BASE}/api/v1/file/get-presigned-url",
+                                   params={"tg_id": user_id, "filename": fname}) as json_url_resp:
                 json_presigned = await json_url_resp.json()
             links.append(f'🧾 <a href="{json_presigned["presigned_url"]}">JSON</a>')
         if links:
@@ -185,7 +230,7 @@ async def confirm_cb(cb: types.CallbackQuery):
 async def edit_prompt(cb: types.CallbackQuery):
     user_id = f"tg_{cb.from_user.id}"
     async with ClientSession() as session:
-        async with session.get(f"{API_BASE}/latest-template", params={"tg_id": user_id}) as r:
+        async with session.get(f"{API_BASE}/api/v1/template/latest-template", params={"tg_id": user_id}) as r:
             parsed = (await r.json()).get('parsed_data', {})
     user_friendly = make_user_edit_json(parsed)
     fields = ", ".join(user_friendly.keys()) or "(нет полей)"
@@ -204,12 +249,12 @@ async def handle_json_edit(msg: Message):
         return
     user_id = f"tg_{msg.from_user.id}"
     async with ClientSession() as session:
-        async with session.get(f"{API_BASE}/latest-template", params={"tg_id": user_id}) as r:
+        async with session.get(f"{API_BASE}/api/v1/template/latest-template", params={"tg_id": user_id}) as r:
             old = (await r.json()).get('parsed_data', {})
         user_friendly_old = make_user_edit_json(old)
         merged = {**user_friendly_old, **new_data}
         async with session.post(
-            f"{API_BASE}/update-latest-template", params={"tg_id": user_id}, json={"parsed_data": merged}
+                f"{API_BASE}api/v1/template/update-latest-template", params={"tg_id": user_id}, json={"parsed_data": merged}
         ) as r2:
             if r2.status == 200:
                 kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -241,7 +286,7 @@ async def choose_prompt(event: types.Message | types.CallbackQuery):
     target = event.message if isinstance(event, types.CallbackQuery) else event
     user_id = f"tg_{target.from_user.id}"
     async with ClientSession() as session:
-        async with session.get(f"{API_BASE}/templates", params={"tg_id": user_id}) as resp:
+        async with session.get(f"{API_BASE}/api/v1/template/templates", params={"tg_id": user_id}) as resp:
             data = await resp.json()
     templates = data.get("templates", [])
     if not templates:
@@ -258,14 +303,15 @@ async def handle_select(cb: types.CallbackQuery):
     user_id = f"tg_{cb.from_user.id}"
     idx = int(cb.data.split(':')[1])
     async with ClientSession() as session:
-        async with session.get(f"{API_BASE}/templates", params={"tg_id": user_id}) as resp:
+        async with session.get(f"{API_BASE}/api/v1/template/templates", params={"tg_id": user_id}) as resp:
             data = await resp.json()
     lst = data.get("templates", [])
     if idx < 0 or idx >= len(lst):
         return await cb.message.answer("❌ Неверный выбор.", reply_markup=main_menu)
     name = lst[idx]['template_name']
     async with ClientSession() as session:
-        async with session.post(f"{API_BASE}/select-template", params={"tg_id": user_id, "template_name": name}) as resp:
+        async with session.post(f"{API_BASE}/api/v1/template/select-template",
+                                params={"tg_id": user_id, "template_name": name}) as resp:
             data = await resp.json()
     if resp.status != 200:
         return await cb.message.answer(f"❌ {data.get('detail')}", reply_markup=main_menu)
@@ -278,12 +324,13 @@ async def handle_select(cb: types.CallbackQuery):
         [InlineKeyboardButton(text="✏️ Изменить поля", callback_data="edit_parsed")]
     ])
     text = (
-        f"✅ Шаблон: <b>{name}</b>\n"
-        + (f"🧩 Шрифты: {', '.join(fonts)}\n" if fonts else "")
-        + f"<pre>{parsed_str}</pre>\n"
-        "Отправьте JSON вида: {\"Service 1\": \"Новое описание\", \"Total\": \"1000\"}"
+            f"✅ Шаблон: <b>{name}</b>\n"
+            + (f"🧩 Шрифты: {', '.join(fonts)}\n" if fonts else "")
+            + f"<pre>{parsed_str}</pre>\n"
+              "Отправьте JSON вида: {\"Service 1\": \"Новое описание\", \"Total\": \"1000\"}"
     )
     await cb.message.answer(text, reply_markup=kb)
+
 
 if __name__ == "__main__":
     asyncio.run(dp.start_polling(bot))

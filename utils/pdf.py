@@ -1,35 +1,62 @@
 import fitz
 import os
 import json
-import logging
-import google.generativeai as genai
-from typing import Dict, Union, Optional, List
 import shutil
+import zipfile
+import xml.etree.ElementTree as ET
+from typing import Dict, Union, Optional, List
+import logging_conf  # импорт твоего конфига (достаточно 1 раз где угодно)
 
-
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or "your_gemini_api"
-genai.configure(api_key=GEMINI_API_KEY)
-
-FIELDS_TO_EXTRACT = [
-    "Invoice Number", "Invoice Date", "Due Date", "Client Name",
-    "Company Name", "Client Address", "Client Phone", "Client Email",
-    "Invoice For", "Bank Name", "Account Name", "Account Number",
-    "IBAN", "SWIFT", "Account From", "Amount", "Currency",
-    "Total", "Subtotal", "Descriptions", "Description"
-]
+logger = logging_conf.logger.getChild("pdf_util")
 
 
 FONT_MAP: Dict[str, str] = {}
 
 
-def ask_gemini(prompt: str) -> str:
+def normalize_font_name(name: str) -> str:
+    return name.split("+")[-1] if "+" in name else name
+
+
+def extract_fonts_from_pdf(file_path: str) -> List[str]:
+    doc = fitz.open(file_path)
+    fonts = set()
+    for page in doc:
+        for font in page.get_fonts():
+            fonts.add(normalize_font_name(font[3]))
+    return list(fonts)
+
+
+def extract_fonts_from_docx(file_path: str) -> List[str]:
+    fonts = set()
     try:
-        model = genai.GenerativeModel("models/gemini-2.5-flash-preview-05-20")
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        logging.error(f"Gemini error: {e}", exc_info=True)
-        return ""
+        with zipfile.ZipFile(file_path, 'r') as docx:
+            if 'word/document.xml' in docx.namelist():
+                xml_content = docx.read('word/document.xml')
+                root = ET.fromstring(xml_content)
+                for rFonts in root.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}rFonts"):
+                    for attr in ["ascii", "hAnsi", "cs", "eastAsia"]:
+                        val = rFonts.attrib.get(
+                            f"{{http://schemas.openxmlformats.org/wordprocessingml/2006/main}}{attr}")
+                        if val:
+                            fonts.add(val)
+    except Exception:
+        pass
+    return list(fonts)
+
+
+def save_extracted_fonts_list(dirpath: str, invoice_name: str, fonts: List[str]) -> str:
+    path = os.path.join(dirpath, f"{invoice_name}_extracted_fonts.txt")
+    with open(path, "w", encoding="utf-8") as f:
+        for font in fonts:
+            f.write(f"{font}\n")
+    return path
+
+
+def save_parsed_data_json(dirpath: str, invoice_name: str, data: dict) -> str:
+    path = os.path.join(dirpath, f"{invoice_name}_parsed_fields.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    return path
 
 
 def extract_blocks_from_pdf(pdf_path: str) -> List[dict]:
@@ -51,45 +78,6 @@ def extract_blocks_from_pdf(pdf_path: str) -> List[dict]:
                         "flags": span.get("flags", 0)
                     })
     return all_blocks
-
-
-def extract_json_from_gemini(text: str) -> str:
-    """
-    Возвращает только первую JSON-строку (от первой {до последней}).
-    """
-    start = text.find('{')
-    end = text.rfind('}')
-    if start == -1 or end == -1 or end < start:
-        raise ValueError("Gemini не вернул JSON!")
-    return text[start:end+1]
-
-
-def extract_fields_with_bbox_gemini(blocks: List[dict]) -> Dict[str, Union[dict, list, None]]:
-    fields_list = ', '.join(FIELDS_TO_EXTRACT)
-    system_prompt = (
-        "You are given an array of text blocks from a PDF invoice. "
-        "Each block contains 'text', its bounding box ('bbox'), font, size, and 'page' number. "
-        f"For each of the following fields [{fields_list}], "
-        "find ONLY the value (not including label, key, or prefix) and return the exact bbox, font, and size for that value (not the whole line, not including any label). "
-        "For fields like 'Descriptions' or 'Description' (service lines), if there are multiple, return a list of all with value/bbox/font/size/page. "
-        "Return valid JSON like: "
-        "{\"Description\": {\"value\": \"...\", \"bbox\": [x0, y0, x1, y1], \"font\": \"...\", \"size\": 11.0, \"page\": page_num}, ...}, if not found — set to null. Do NOT add any explanation or non-JSON text."
-    )
-    user_prompt = "blocks:\n" + json.dumps(blocks, ensure_ascii=False)
-    full_prompt = f"{system_prompt}\n{user_prompt}"
-
-    resp_text = ask_gemini(full_prompt)
-    resp_text = resp_text.strip()
-    if not resp_text:
-        raise ValueError("Gemini вернул пустой ответ!")
-
-    try:
-        json_only = extract_json_from_gemini(resp_text)
-        fields = json.loads(json_only)
-    except Exception:
-        logging.error(f"Gemini output parse error:\n{resp_text}")
-        raise
-    return fields
 
 
 def find_value_bbox(page, value):
@@ -175,9 +163,12 @@ def process_invoice_and_replace(
     pdf_path: str,
     output_pdf: str,
     changes: Dict[str, str],
-    font_map: Optional[Dict[str, str]] = None
+    font_map: Optional[Dict[str, str]] = None,
+    extract_fields_with_bbox_gemini=None  # <- функция-инъекция!
 ) -> Dict[str, Union[int, str, dict]]:
     blocks = extract_blocks_from_pdf(pdf_path)
+    if extract_fields_with_bbox_gemini is None:
+        raise RuntimeError("extract_fields_with_bbox_gemini не передан! Используйте сервис Gemini.")
     fields = extract_fields_with_bbox_gemini(blocks)
     editable_fields = []
     desc_values = set()
