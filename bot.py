@@ -16,7 +16,10 @@ from aiogram.filters import CommandStart
 from aiohttp import FormData, ClientSession
 from aiogram.client.default import DefaultBotProperties
 
-API_TOKEN = os.getenv("BOT_TOKEN", "7687107590:AAEaIJq9MgELGgYcISF0ht6fPNiTEv4JV7k")
+from dotenv import load_dotenv
+load_dotenv(dotenv_path=".env")
+
+API_TOKEN = os.getenv("BOT_TOKEN", "your bot token")
 API_BASE = os.getenv("API_BASE", "http://localhost:8000")
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
